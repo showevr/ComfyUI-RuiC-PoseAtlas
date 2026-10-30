@@ -1,0 +1,770 @@
+/* RuiC-PoseAtlas · ComfyUI 图库面板样式
+   全部选择器都带 pa- 前缀，避免污染 ComfyUI 自身样式。
+   颜色尽量从 ComfyUI 的主题变量派生，浅色 / 深色主题都能看。 */
+
+.pa-root {
+  --pa-fg: var(--fg-color, var(--p-text-color, #222));
+  --pa-bg: var(--comfy-menu-bg, var(--p-content-background, #fff));
+  --pa-accent: #5b8cff;
+  --pa-accent-soft: rgba(91, 140, 255, 0.16);
+  --pa-line: color-mix(in srgb, var(--pa-fg) 14%, transparent);
+  --pa-line-strong: color-mix(in srgb, var(--pa-fg) 26%, transparent);
+  --pa-muted: color-mix(in srgb, var(--pa-fg) 52%, transparent);
+  --pa-surface: color-mix(in srgb, var(--pa-fg) 5%, transparent);
+  --pa-surface-hover: color-mix(in srgb, var(--pa-fg) 10%, transparent);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--pa-fg);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.pa-root *,
+.pa-lightbox *,
+.pa-modal * {
+  box-sizing: border-box;
+}
+
+/* ---------------------------------------------------------------- 顶部工具区 */
+.pa-head {
+  flex: 0 0 auto;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--pa-line);
+  background: var(--pa-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pa-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pa-title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.pa-count {
+  font-size: 11px;
+  color: var(--pa-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pa-langs {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--pa-line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.pa-langs button {
+  border: 0;
+  background: transparent;
+  color: var(--pa-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pa-langs button:hover {
+  background: var(--pa-surface-hover);
+  color: var(--pa-fg);
+}
+
+.pa-langs button.is-on {
+  background: var(--pa-accent-soft);
+  color: var(--pa-accent);
+  font-weight: 600;
+}
+
+.pa-search {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  border: 1px solid var(--pa-line);
+  border-radius: 8px;
+  background: var(--pa-surface) no-repeat 9px center;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-4.2-4.2'/%3E%3C/svg%3E");
+  color: var(--pa-fg);
+  font: inherit;
+  outline: none;
+}
+
+.pa-search::placeholder {
+  color: var(--pa-muted);
+}
+
+.pa-search:focus {
+  border-color: var(--pa-accent);
+  box-shadow: 0 0 0 3px var(--pa-accent-soft);
+}
+
+.pa-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.pa-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.pa-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--pa-line);
+  background: transparent;
+  color: var(--pa-muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.pa-chip:hover {
+  background: var(--pa-surface-hover);
+  color: var(--pa-fg);
+}
+
+.pa-chip.is-on {
+  background: var(--pa-accent);
+  border-color: var(--pa-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.pa-select {
+  height: 28px;
+  width: 100%;
+  border: 1px solid var(--pa-line);
+  border-radius: 8px;
+  background: var(--pa-surface);
+  color: var(--pa-fg);
+  font: inherit;
+  font-size: 11px;
+  padding: 0 8px;
+  outline: none;
+  cursor: pointer;
+}
+
+.pa-select:focus {
+  border-color: var(--pa-accent);
+}
+
+.pa-select option {
+  background: var(--pa-bg);
+  color: var(--pa-fg);
+}
+
+/* -------------------------------------------------------------------- 网格 */
+.pa-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+
+.pa-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.pa-body::-webkit-scrollbar-thumb {
+  background: var(--pa-line-strong);
+  border-radius: 4px;
+}
+
+.pa-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.pa-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 9px;
+}
+
+.pa-shot {
+  position: relative;
+  display: block;
+  aspect-ratio: 3 / 4;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--pa-surface);
+  border: 1px solid var(--pa-line);
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.pa-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.35s ease;
+}
+
+.pa-card:hover .pa-shot {
+  border-color: var(--pa-accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+
+.pa-card:hover .pa-shot img {
+  transform: scale(1.035);
+}
+
+.pa-card:focus-visible .pa-shot {
+  border-color: var(--pa-accent);
+  box-shadow: 0 0 0 2px var(--pa-accent-soft);
+  outline: none;
+}
+
+.pa-no {
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(3px);
+}
+
+.pa-name {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--pa-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 0 1px;
+}
+
+.pa-card:hover .pa-name {
+  color: var(--pa-fg);
+}
+
+.pa-empty {
+  grid-column: 1 / -1;
+  padding: 40px 12px;
+  text-align: center;
+  color: var(--pa-muted);
+  font-size: 12px;
+}
+
+.pa-error {
+  margin: 12px;
+  padding: 12px;
+  border: 1px solid rgba(226, 74, 74, 0.4);
+  border-radius: 10px;
+  background: rgba(226, 74, 74, 0.08);
+  color: var(--pa-fg);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pa-error button {
+  margin-top: 8px;
+  border: 1px solid var(--pa-line-strong);
+  background: var(--pa-surface);
+  color: inherit;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ 灯箱 */
+.pa-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 12, 16, 0.66);
+  backdrop-filter: blur(6px);
+  animation: pa-fade 0.16s ease;
+}
+
+@keyframes pa-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pa-lb-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  height: min(88vh, 900px);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--pa-bg, #fff);
+  color: var(--pa-fg, #222);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.pa-lb-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.pa-lb-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pa-lb-title strong {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pa-lb-title span {
+  font-size: 11px;
+  color: var(--pa-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pa-lb-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pa-btn {
+  border: 1px solid var(--pa-line-strong);
+  background: var(--pa-surface);
+  color: var(--pa-fg);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pa-btn:hover {
+  background: var(--pa-surface-hover);
+}
+
+.pa-btn-primary {
+  background: var(--pa-accent);
+  border-color: var(--pa-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.pa-btn-primary:hover {
+  filter: brightness(1.06);
+  background: var(--pa-accent);
+}
+
+.pa-btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.pa-lb-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+
+.pa-lb-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: #0d0f13;
+}
+
+.pa-lb-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  display: block;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, 0.5);
+}
+
+.pa-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 52px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.pa-nav:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.pa-nav.prev { left: 10px; }
+.pa-nav.next { right: 10px; }
+
+.pa-lb-side {
+  flex: 0 0 210px;
+  border-left: 1px solid var(--pa-line);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.pa-side-label {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pa-muted);
+  margin-bottom: 5px;
+}
+
+.pa-angle-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+  gap: 6px;
+}
+
+.pa-angle {
+  padding: 0;
+  border: 1px solid var(--pa-line);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--pa-surface);
+  cursor: pointer;
+  position: relative;
+  aspect-ratio: 3 / 4;
+}
+
+.pa-angle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pa-angle span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1px 0;
+  font-size: 9.5px;
+  text-align: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.pa-angle.is-on {
+  border-color: var(--pa-accent);
+  box-shadow: 0 0 0 2px var(--pa-accent-soft);
+}
+
+.pa-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--pa-muted);
+}
+
+.pa-meta div {
+  display: flex;
+  gap: 6px;
+}
+
+.pa-meta b {
+  color: var(--pa-fg);
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+
+.pa-hint {
+  font-size: 10.5px;
+  color: var(--pa-muted);
+  border-top: 1px solid var(--pa-line);
+  padding-top: 8px;
+  line-height: 1.6;
+}
+
+.pa-hint kbd {
+  font: inherit;
+  font-size: 10px;
+  padding: 0 3px;
+  border: 1px solid var(--pa-line-strong);
+  border-radius: 4px;
+  background: var(--pa-surface);
+}
+
+/* --------------------------------------------------------------- 弹窗图库 */
+.pa-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 19990;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(10, 12, 16, 0.55);
+  backdrop-filter: blur(4px);
+  animation: pa-fade 0.16s ease;
+}
+
+.pa-modal-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  height: min(84vh, 860px);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--pa-bg, #fff);
+  color: var(--pa-fg, #222);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.pa-modal-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--pa-line);
+}
+
+.pa-modal-bar strong {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.pa-modal-bar .pa-spacer {
+  margin-left: auto;
+}
+
+.pa-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.pa-modal-body .pa-root {
+  height: 100%;
+}
+
+.pa-modal .pa-grid {
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 10px;
+}
+
+/* 弹窗顶部已经有标题，面板里的小标题就重复了 */
+.pa-modal .pa-title {
+  display: none;
+}
+
+/* ------------------------------------------------------------- 浮动入口 */
+.pa-fab {
+  position: fixed;
+  left: 12px;
+  bottom: 78px;
+  z-index: 1200;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  background: var(--comfy-menu-bg, #fff);
+  color: var(--fg-color, #222);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+}
+
+.pa-fab:hover {
+  border-color: #5b8cff;
+  color: #5b8cff;
+}
+
+body.pa-lightbox-open {
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .pa-lb-body { flex-direction: column; }
+  .pa-lb-side {
+    flex: 0 0 auto;
+    border-left: 0;
+    border-top: 1px solid var(--pa-line);
+  }
+  .pa-lightbox, .pa-modal { padding: 10px; }
+}
+
+/* ================================================================
+   节点内预览（RuiCPoseAtlasLoad / RuiCPoseAtlasAngles）
+   ================================================================ */
+
+.pa-npreview {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 5px;
+  box-sizing: border-box;
+  align-items: stretch;
+}
+
+.pa-npreview .pa-np {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--comfy-input-bg, var(--pa-card, #262626));
+  border: 1px solid var(--border-color, var(--pa-line, rgba(128, 128, 128, 0.35)));
+  cursor: pointer;
+  transition: outline-color 0.12s ease;
+}
+
+.pa-npreview .pa-np img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.pa-npreview .pa-np-tag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 2px 5px;
+  font-size: 9px;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--fg-color, #eee);
+  background: color-mix(in srgb, var(--comfy-menu-bg, #1e1e1e) 72%, transparent);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 多视角节点：当前选中的角度高亮；选 all 时全部视为输出 */
+.pa-npreview .pa-np.is-on {
+  outline: 2px solid var(--comfy-accent, #5b8cff);
+  outline-offset: -2px;
+}
+
+.pa-npreview .pa-np:hover {
+  border-color: var(--comfy-accent, #5b8cff);
+}
+
+/* ================================================================
+   卡片悬浮「插入节点」按钮
+   ================================================================ */
+
+.pa-card .pa-quick {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 0;
+  background: var(--pa-accent, #5b8cff);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, filter 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+
+.pa-card:hover .pa-quick,
+.pa-card:focus-visible .pa-quick {
+  opacity: 1;
+  transform: none;
+}
+
+.pa-card .pa-quick:hover {
+  filter: brightness(1.12);
+}

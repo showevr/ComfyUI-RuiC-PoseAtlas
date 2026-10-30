@@ -23,6 +23,7 @@
 
 [在线体验](#在线体验) ·
 [项目简介](#项目简介) ·
+[ComfyUI 集成](#comfyui-集成) ·
 [界面预览](#界面预览) ·
 [数据概览](#数据概览) ·
 [快速开始](#快速开始) ·
@@ -44,6 +45,15 @@
 很多参考图库的问题是：图片分散、视角不统一、难以把同一姿态的不同角度放在一起比较。这个项目以「姿态」为单位组织数据，把同一组的五个视角收进一张卡片；打开大图后可以用方向键连续切换，保持体态、比例和镜头关系的一致性。
 
 同时，它也是一个可以独立部署的前端作品：**纯 HTML + CSS + ES Modules**，没有框架、没有打包器、没有运行时依赖。克隆下来用一个静态服务器打开即可；需要部署时，直接交给 GitHub Pages、Cloudflare Pages、Netlify 或任意静态托管即可。
+
+### 两种用法
+
+| 用法 | 说明 |
+| --- | --- |
+| **网页版** | 静态站点，浏览器直接浏览、搜索、下载原图（即在线体验）。 |
+| **ComfyUI 节点** | 把整个仓库放进 `custom_nodes/`，即可在 ComfyUI 里用节点读取任意姿态，输出到 ControlNet / IPAdapter / 图生图。自带侧边栏图库面板，选图即插入节点。 |
+
+同一份 `data/` 与图片资源同时服务两种用法，不需要复制文件、不需要额外依赖。详见 [ComfyUI 集成](#comfyui-集成)。
 
 ## 在线体验
 
@@ -110,6 +120,9 @@
 
 - **零依赖、零构建**  
   没有 React / Vue / 打包器；打开静态服务器就能运行，部署成本极低。
+
+- **ComfyUI 自定义节点**  
+  同一份数据同时服务网页版与 ComfyUI：三个节点读取任意姿态并输出 IMAGE / MASK，自带侧边栏图库面板，点缩略图即插入配好的节点。
 
 - **工程化校验**  
   自带 `npm run verify`：检查数据数量、三语名称、图片尺寸、文件引用、i18n 键完整性等。
@@ -243,11 +256,92 @@ npm start
 
 ---
 
+## ComfyUI 集成
+
+把整个仓库放进 `ComfyUI/custom_nodes/` 就能当自定义节点用：不复制图片、不额外装依赖、不影响原有的静态站点。
+
+### 安装
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
+```
+
+或者直接把解压后的文件夹丢进 `custom_nodes/`（关键是 `__init__.py`、`data/`、`img/`、`thumbs/`、`web/` 要一起在）。然后**重启 ComfyUI**，节点出现在右键菜单的 **`RuiC/姿态图库 PoseAtlas`** 分类下。
+
+- 依赖：**无**。只用 ComfyUI 自带的 torch / Pillow / aiohttp。
+- 启动开销：**几乎为零**。只在第一次用到节点时读一次 `data/poses.json`（186 KB），不会扫描 1,439 张图。
+- 静态站点仍可照常部署，两种用法共享同一份数据与图片。
+
+### 三个节点
+
+| 节点 | 类名 | 输入 | 输出 |
+| --- | --- | --- | --- |
+| 姿态图库 · 加载 | `RuiCPoseAtlasLoad` | `pose`、`angle` | `image`、`mask`、`info` |
+| 姿态图库 · 随机 | `RuiCPoseAtlasRandom` | `series`、`category`、`angle`、`seed`、`control_after_generate` | `image`、`mask`、`info` |
+| 姿态图库 · 多视角 | `RuiCPoseAtlasAngles` | `pose`、`angles` | `image`、`mask`、`info` |
+
+**`pose` 下拉框**列出全部 288 组，格式为 `P001 / full_sexy / S形站姿・胯部侧顶`——编号和系列 key 是稳定标识，名称部分随语言变也不影响已保存的工作流。下拉框可以直接输入筛选：`P019`、`full_std`、`坐姿`、`M字`、任意中日英名称都能命中。
+
+**`angle`** 取值 `front` / `diagonal` / `side` / `high` / `low`，选 `all` 会把该姿态**全部可用角度**作为一个 batch 输出（有的姿态只有 4 个角度，会按实际存在的输出）。
+
+**输出说明**
+
+| 输出 | 内容 |
+| --- | --- |
+| `image` | `B × 1200 × 900 × 3`，float32 `0–1`，原图不缩放 |
+| `mask` | `B × 1200 × 900`，取**反相亮度**：白底 = 0，线稿越深越接近 1。原图是 RGB 没有 alpha，所以线稿遮罩用亮度反推，适合做局部重绘/叠加；需要人物剪影请自己再处理 |
+| `info` | 多行文本：id、编号、系列、分类、中日英名称、角度、文件名，便于接字符串节点或调试 |
+
+典型接法：`image` → ControlNet（lineart / canny）或 IPAdapter；`info` 里的编号可以直接拼进文件名做批量命名。
+
+### 图库面板
+
+<p align="center">
+  <img src="docs/preview-comfyui-picker.jpg" alt="ComfyUI 弹窗图库" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/preview-comfyui-lightbox.jpg" alt="ComfyUI 大图浏览" width="72%">
+</p>
+
+- **侧边栏「姿态图库」**：左侧工具栏新增一个图片图标，打开就是缩略图网格；顶部可搜索、按系列/分类筛选，右上角切换 中 / EN / 日。
+- **点缩略图**开大图：`←` `→` 换角度，`↑` `↓` 换姿态，`Enter` 插入节点，`Esc` 关闭；缩略图右下角有悬浮「插入节点」按钮，一键上画布。
+- **智能复用，不堆节点**：工作流里没有图库节点时，「插入节点」才新建一个配好 `pose` + `angle` 的节点；已经有了就只把新姿态写进现有节点（画布上选中谁就更新谁，没选中就更新最近创建的那个），连线保持不动，不用删节点重新连。
+- **节点上的「姿态图库」按钮**打开弹窗版图库；挑完写回当前节点的 `pose` / `angle`，适合先搭好工作流再换姿态。
+- 画布空白处**右键菜单**里也有入口。
+
+### 实现说明
+
+```text
+__init__.py            ComfyUI 入口：节点映射 + WEB_DIRECTORY + 路由注册
+poseatlas/core.py      poses.json 索引、选项解析、读图转张量
+poseatlas/nodes.py     三个节点
+poseatlas/routes.py    /poseatlas/api/index 与 /poseatlas/media/*
+web/poseatlas.js       侧边栏标签页、灯箱、弹窗、插入节点
+web/poseatlas.css      面板样式（全部 pa- 前缀，跟随 ComfyUI 主题深浅色）
+```
+
+- **不复制图片**：`/poseatlas/media/img/xxx.png` 直接从节点目录读文件（`FileResponse`，7 天强缓存）。只允许 `img/` 与 `thumbs/` 两个目录，带路径穿越防护。
+- **子路径友好**：前端用 `api.apiURL()` / `api.fetchApi()` 拼接地址，ComfyUI 挂在 `/comfyui/` 这类子路径下也能正常取图。
+- **样式不串味**：全部选择器带 `pa-` 前缀，颜色从 ComfyUI 的 `--comfy-gray-*` / `--fg-color` 派生，浅色深色主题都能用。
+- **语言**：面板语言写进 `localStorage`，与网页版互不影响。
+
+---
+
 ## 项目结构
 
 ```text
 RuiC-PoseAtlas/
-├── index.html                  # 单页入口
+├── __init__.py                 # ComfyUI 节点入口（节点映射 / WEB_DIRECTORY / 路由）
+├── poseatlas/
+│   ├── core.py                 # poses.json 索引、选项解析、读图转张量
+│   ├── nodes.py                # 三个节点：Load / Random / Angles
+│   └── routes.py               # /poseatlas/api/index、/poseatlas/media/*
+├── web/
+│   ├── poseatlas.js            # ComfyUI 前端扩展：侧边栏图库 / 灯箱 / 插入节点
+│   └── poseatlas.css           # 面板样式（pa- 前缀，跟随 ComfyUI 主题）
+├── index.html                  # 单页入口（网页版）
 ├── assets/
 │   ├── css/app.css             # 设计系统与响应式布局
 │   ├── js/app.js               # 数据、筛选、渲染、灯箱、快捷键
@@ -453,6 +547,25 @@ npm run fetch-images
 ### 支持手机吗？
 
 支持。移动端使用双列卡片、折叠筛选面板和可滚动的大图页；已在 390 × 844 视口验证无横向溢出。
+
+### ComfyUI 里找不到节点怎么办？
+
+1. 确认文件夹直接在 `custom_nodes/` 下，且里面有 `__init__.py`；
+2. 重启 ComfyUI（不是只刷新浏览器页面）；
+3. 节点在右键菜单 → **`RuiC/姿态图库 PoseAtlas`** 分类，搜索 `PoseAtlas` 也能找到；
+4. 如果侧边栏没有「姿态图库」图标，检查控制台是否报 `extension ready`——注册失败时会退化成左下角一个 `P` 浮动按钮。
+
+### ComfyUI 里图片 404 / 提示图片文件缺失？
+
+说明 `img/` 或 `thumbs/` 不完整。仓库约 700 MB，需要完整克隆（或用 Actions 的 **Fetch image assets** / `npm run fetch-images` 补齐）。节点报错信息里会直接给出缺失的相对路径。
+
+### 为什么 mask 不是人物剪影？
+
+原图是 RGB 线稿、没有 alpha 通道，所以 `mask` 用「反相亮度」生成：白底 = 0，线条越深越接近 1，适合做局部重绘、线稿叠加。如果需要人物外轮廓剪影，请接一个分割/抠图节点自己生成。
+
+### ComfyUI 集成会让仓库变两倍大吗？
+
+不会。节点直接读取原有的 `img/`、`thumbs/`、`data/poses.json`，没有复制任何图片；新增的 Python 与前端代码不到 100 KB。静态站点的 GitHub Pages 部署也不受影响（workflow 只打包站点文件）。
 
 ---
 

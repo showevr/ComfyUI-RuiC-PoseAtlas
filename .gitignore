@@ -3,3 +3,8 @@ _source/
 node_modules/
 *.log
 *.part
+
+# WorkBuddy 工作区记忆（本地）
+.workbuddy/
+__pycache__/
+*.pyc
