@@ -4,7 +4,11 @@ node_modules/
 *.log
 *.part
 
-# WorkBuddy 工作区记忆（本地）
+# Local full-size portrait originals (≈4.5 GB). Thumbnails are committed so
+# the deployed grid is fast; run `npm run fetch-faces` to restore this folder.
+portrait/img/
+
+# WorkBuddy 工作区记忆 / Python 缓存（本地，不随仓库）
 .workbuddy/
 __pycache__/
 *.pyc
