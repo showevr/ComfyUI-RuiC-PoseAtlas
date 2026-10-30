@@ -22,6 +22,12 @@ DATA_FILE = ROOT / "data" / "poses.json"
 IMAGE_DIR = ROOT / "img"
 THUMB_DIR = ROOT / "thumbs"
 
+# 衣装图鉴 / 人像图鉴
+COSTUME_FILE = ROOT / "data" / "costumes.json"
+PORTRAIT_FILE = ROOT / "data" / "faces.json"
+COSTUME_DIR = ROOT / "costume"
+PORTRAIT_DIR = ROOT / "portrait"
+
 # 稳定的角度 key（与 data/poses.json 中 variants[].angle 一致，顺序即展示顺序）
 ANGLE_KEYS = ("front", "diagonal", "side", "high", "low")
 LANGUAGES = ("zh", "en", "ja")
@@ -217,34 +223,71 @@ def get_atlas() -> PoseAtlas:
 
 
 # ---------------------------------------------------------------------- 转张量
-def load_tensors(variants: list[dict], device=None):
-    """把若干变体读成 IMAGE / MASK 张量。返回 (image, mask)，形状 [B,H,W,C]。"""
+def read_tensor(path: Path, mask_mode: str = "line", device=None):
+    """读一张图，返回 (image[H,W,C], mask[H,W])。
+
+    mask_mode：
+      - ``line``       姿态线稿：mask = 1 - 亮度（白底=0，线条越深越接近 1）
+      - ``silhouette`` 衣装：按边框估背景色，mask = 背景比图片亮多少（白底=0，衣服接近 1）
+      - ``full``       照片：整张全 1（人像没有天然遮罩）
+    图片自带 alpha 时一律用 alpha 当 mask，忽略 mask_mode。
+    """
     import numpy as np
     import torch
     from PIL import Image, ImageOps
 
-    atlas = get_atlas()
+    with Image.open(path) as im:
+        im = ImageOps.exif_transpose(im)
+        alpha = None
+        if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+            alpha = np.asarray(im.convert("RGBA").getchannel("A")).astype(np.float32) / 255.0
+        arr = np.asarray(im.convert("RGB")).astype(np.float32) / 255.0
+
+    img = torch.from_numpy(arr)
+    if device is not None:
+        img = img.to(device)
+
+    if alpha is not None:
+        m = alpha
+    elif mask_mode == "full":
+        m = np.ones(arr.shape[:2], dtype=np.float32)
+    elif mask_mode == "silhouette":
+        # 衣装图是浅灰摄影棚背景，用「离背景色有多远」比单纯亮度靠谱得多：
+        # 取边框一圈的中位色当背景，再按 RGB 距离归一化，衣服轮廓相当干净。
+        ring = np.concatenate(
+            [arr[:6].reshape(-1, 3), arr[-6:].reshape(-1, 3),
+             arr[:, :6].reshape(-1, 3), arr[:, -6:].reshape(-1, 3)]
+        )
+        bg = np.median(ring, axis=0) if ring.size else np.array([1.0, 1.0, 1.0])
+        dist = np.linalg.norm(arr - bg[None, None, :], axis=2)
+        m = np.clip(dist / 0.45, 0.0, 1.0)
+    else:  # line
+        m = 1.0 - arr.mean(axis=2)
+
+    mask = torch.from_numpy(np.ascontiguousarray(m))
+    if device is not None:
+        mask = mask.to(device)
+    return img, mask
+
+
+def stack_tensors(paths: list[Path], mask_mode: str = "line", device=None):
+    """把多张图堆成 batch：[B,H,W,C] / [B,H,W]。"""
+    import torch
+
     images, masks = [], []
-    for variant in variants:
-        path = atlas.image_path(variant)
-        with Image.open(path) as im:
-            im = ImageOps.exif_transpose(im).convert("RGB")
-            arr = np.asarray(im).astype(np.float32) / 255.0
-
-        img = torch.from_numpy(arr)
-        if device is not None:
-            img = img.to(device)
+    for path in paths:
+        img, mask = read_tensor(path, mask_mode, device)
         images.append(img.unsqueeze(0))
-
-        # 线稿没有 alpha 通道，这里用「反相亮度」当遮罩：
-        # 白底 → 0，线条越深 → 越接近 1。适合直接拿去做局部重绘或叠加。
-        lum = arr.mean(axis=2)
-        mask = torch.from_numpy(1.0 - lum)
-        if device is not None:
-            mask = mask.to(device)
         masks.append(mask.unsqueeze(0))
-
     return torch.cat(images, dim=0), torch.cat(masks, dim=0)
+
+
+def load_tensors(variants: list[dict], device=None):
+    """姿态变体 → IMAGE / MASK 张量。返回 (image, mask)，形状 [B,H,W,C]。"""
+    atlas = get_atlas()
+    paths = [atlas.image_path(v) for v in variants]
+    return stack_tensors(paths, "line", device)
+
 
 
 def build_info(pose: dict, variants: list[dict], lang: str = DEFAULT_LANGUAGE) -> str:
@@ -264,4 +307,303 @@ def build_info(pose: dict, variants: list[dict], lang: str = DEFAULT_LANGUAGE) -
     lines.append("angles: " + ", ".join(v.get("angle", "?") for v in variants))
     if variants:
         lines.append("files: " + ", ".join(Path(v.get("full", "")).name for v in variants))
+    return "\n".join(lines)
+
+
+# ====================================================================== 衣装图鉴
+class CostumeAtlas:
+    """costumes.json 的只读索引（1,407 套无人衣装）。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._ready = False
+        self.data: dict = {}
+        self.costumes: list[dict] = []
+        self.by_id: dict[str, dict] = {}
+        self.categories: list[dict] = []
+        self.category_names: dict[str, dict] = {}
+        self.groups: list[dict] = []
+        self.group_names: dict[str, dict] = {}
+        self.colors: list[dict] = []
+        self.totals: dict = {}
+
+    def ensure(self) -> "CostumeAtlas":
+        if self._ready:
+            return self
+        with self._lock:
+            if self._ready:
+                return self
+            if not COSTUME_FILE.is_file():
+                raise PoseAtlasError(
+                    f"找不到衣装数据文件：{COSTUME_FILE}\n"
+                    "请确认仓库完整（data/costumes.json 与 costume/ 图片需要一起存在）。"
+                )
+            data = json.loads(COSTUME_FILE.read_text(encoding="utf-8"))
+            self.data = data
+            self.costumes = list(data.get("costumes") or [])
+            self.by_id = {c["id"].upper(): c for c in self.costumes}
+            self.categories = list(data.get("categories") or [])
+            self.category_names = {c["key"]: c.get("names") or {} for c in self.categories}
+            self.groups = list(data.get("groups") or [])
+            self.group_names = {g["key"]: g.get("names") or {} for g in self.groups}
+            self.colors = list(data.get("colors") or [])
+            self.totals = data.get("totals") or {}
+            if not self.costumes:
+                raise PoseAtlasError(f"{COSTUME_FILE} 里没有任何衣装记录。")
+            self._ready = True
+            return self
+
+    # ------------------------------------------------------------------ 命名
+    def category_label(self, key: str, lang: str = DEFAULT_LANGUAGE) -> str:
+        names = self.category_names.get(key) or {}
+        return names.get(lang) or names.get("zh") or names.get("en") or key
+
+    def group_label(self, key: str, lang: str = DEFAULT_LANGUAGE) -> str:
+        names = self.group_names.get(key) or {}
+        return names.get(lang) or names.get("zh") or names.get("en") or key
+
+    def color_label(self, key: str, lang: str = DEFAULT_LANGUAGE) -> str:
+        from .tags import tag_name
+
+        return tag_name(key, lang)
+
+    def label(self, costume: dict, lang: str = DEFAULT_LANGUAGE) -> str:
+        """SPR-0001 / spring / 春・连衣裙"""
+        head = f"{costume.get('id', '')}{LABEL_SEP}{costume.get('cat', '')}"
+        name = f"{self.category_label(costume.get('cat', ''), lang)}・{self.group_label(costume.get('group', ''), lang)}"
+        return f"{head}{LABEL_SEP}{name}"
+
+    def labels(self, lang: str = DEFAULT_LANGUAGE) -> list[str]:
+        self.ensure()
+        return [self.label(c, lang) for c in self.costumes]
+
+    # ------------------------------------------------------------------ 解析
+    def resolve(self, value) -> dict:
+        """支持 `SPR-0001`、`SPR-0001 / spring / 春・连衣裙`、`spr-0001`。"""
+        self.ensure()
+        text = (value or "").strip() if isinstance(value, str) else ""
+        if not text:
+            raise PoseAtlasError("没有选择衣装（costume 为空）。")
+
+        first = text.split("/")[0].strip()
+        hit = self.by_id.get(first.upper())
+        if hit:
+            return hit
+
+        m = re.search(r"([A-Za-z]{2,4}-\d{2,5})", text)
+        if m and m.group(1).upper() in self.by_id:
+            return self.by_id[m.group(1).upper()]
+
+        raise PoseAtlasError(
+            f"无法识别的衣装选项：{text!r}。\n请在节点的下拉框里重新选择，或使用形如 \"SPR-0001\" 的编号。"
+        )
+
+    # ------------------------------------------------------------------ 筛选
+    def filter_costumes(self, cat: str = "all", group: str = "all") -> list[dict]:
+        self.ensure()
+        out = self.costumes
+        if cat and cat != "all":
+            out = [c for c in out if c.get("cat") == cat]
+        if group and group != "all":
+            out = [c for c in out if c.get("group") == group]
+        return out
+
+    def pick_random(self, seed: int, cat: str = "all", group: str = "all") -> dict:
+        pool = self.filter_costumes(cat, group)
+        if not pool:
+            raise PoseAtlasError(f"筛选条件下没有衣装（cat={cat!r}, group={group!r}）。")
+        return pool[random.Random(int(seed) & 0xFFFFFFFFFFFFFFFF).randrange(len(pool))]
+
+    # ------------------------------------------------------------------ 图片
+    def image_path(self, costume: dict, prefer_full: bool = True) -> Path:
+        candidates = [costume.get("image"), costume.get("thumb")]
+        if not prefer_full:
+            candidates.reverse()
+        for rel in candidates:
+            if not rel:
+                continue
+            path = (ROOT / rel).resolve()
+            if path.is_file():
+                return path
+        raise PoseAtlasError(
+            f"衣装图片缺失：{costume.get('image') or costume.get('thumb')}\n"
+            "请重新完整拉取仓库（costume/ 目录共 2,814 个文件）。"
+        )
+
+
+# ====================================================================== 人像图鉴
+class PortraitAtlas:
+    """faces.json 的只读索引（1,499 张 AI 人像）。
+
+    注意：`portrait/img/` 全尺寸原图（约 4.5 GB）不随仓库分发，只带 400×500 缩略图。
+    节点优先用原图，没有就回落到缩略图，并在 info 里标注实际尺寸。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._ready = False
+        self.data: dict = {}
+        self.images: list[dict] = []
+        self.by_id: dict[str, dict] = {}
+        self.sections: list[dict] = []
+        self.section_names: dict[str, dict] = {}
+        self.hairs: list[dict] = []
+        self.hair_names: dict[str, dict] = {}
+        self.totals: dict = {}
+
+    def ensure(self) -> "PortraitAtlas":
+        if self._ready:
+            return self
+        with self._lock:
+            if self._ready:
+                return self
+            if not PORTRAIT_FILE.is_file():
+                raise PoseAtlasError(
+                    f"找不到人像数据文件：{PORTRAIT_FILE}\n"
+                    "请确认仓库完整（data/faces.json 与 portrait/thumbs 需要一起存在）。"
+                )
+            data = json.loads(PORTRAIT_FILE.read_text(encoding="utf-8"))
+            self.data = data
+            self.images = list(data.get("images") or [])
+            self.by_id = {str(i["id"]): i for i in self.images}
+            self.sections = list(data.get("sections") or [])
+            self.section_names = {s["key"]: s.get("names") or {} for s in self.sections}
+            self.hairs = list(data.get("hairs") or [])
+            self.hair_names = {h["key"]: h.get("names") or {} for h in self.hairs}
+            self.totals = data.get("totals") or {}
+            if not self.images:
+                raise PoseAtlasError(f"{PORTRAIT_FILE} 里没有任何人像记录。")
+            self._ready = True
+            return self
+
+    # ------------------------------------------------------------------ 命名
+    def section_label(self, key: str, lang: str = DEFAULT_LANGUAGE) -> str:
+        names = self.section_names.get(key) or {}
+        return names.get(lang) or names.get("zh") or names.get("en") or key
+
+    def hair_label(self, key: str, lang: str = DEFAULT_LANGUAGE) -> str:
+        names = self.hair_names.get(key) or {}
+        return names.get(lang) or names.get("zh") or names.get("en") or key
+
+    def label(self, image: dict, lang: str = DEFAULT_LANGUAGE) -> str:
+        """f71f980dde3 / face / 脸部・短发"""
+        head = f"{image.get('id', '')}{LABEL_SEP}{image.get('sec', '')}"
+        name = f"{self.section_label(image.get('sec', ''), lang)}・{self.hair_label(image.get('hair', ''), lang)}"
+        return f"{head}{LABEL_SEP}{name}"
+
+    def labels(self, lang: str = DEFAULT_LANGUAGE) -> list[str]:
+        self.ensure()
+        return [self.label(i, lang) for i in self.images]
+
+    # ------------------------------------------------------------------ 解析
+    def resolve(self, value) -> dict:
+        self.ensure()
+        text = (value or "").strip() if isinstance(value, str) else ""
+        if not text:
+            raise PoseAtlasError("没有选择人像（portrait 为空）。")
+
+        first = text.split("/")[0].strip()
+        if first in self.by_id:
+            return self.by_id[first]
+
+        m = re.search(r"\b([0-9a-f]{8,})\b", text, re.IGNORECASE)
+        if m:
+            hit = self.by_id.get(m.group(1).lower()) or self.by_id.get(m.group(1))
+            if hit:
+                return hit
+
+        raise PoseAtlasError(
+            f"无法识别的人像选项：{text!r}。\n请在节点的下拉框里重新选择。"
+        )
+
+    # ------------------------------------------------------------------ 筛选
+    def filter_images(self, section: str = "all", hair: str = "all") -> list[dict]:
+        self.ensure()
+        out = self.images
+        if section and section != "all":
+            out = [i for i in out if i.get("sec") == section]
+        if hair and hair != "all":
+            out = [i for i in out if i.get("hair") == hair]
+        return out
+
+    def pick_random(self, seed: int, section: str = "all", hair: str = "all") -> dict:
+        pool = self.filter_images(section, hair)
+        if not pool:
+            raise PoseAtlasError(f"筛选条件下没有人像（section={section!r}, hair={hair!r}）。")
+        return pool[random.Random(int(seed) & 0xFFFFFFFFFFFFFFFF).randrange(len(pool))]
+
+    # ------------------------------------------------------------------ 图片
+    def image_path(self, image: dict) -> tuple[Path, bool]:
+        """返回 (路径, 是否是原图)。原图不在仓库里时回落到缩略图。"""
+        for rel, is_full in ((image.get("full"), True), (image.get("thumb"), False)):
+            if not rel:
+                continue
+            path = (ROOT / rel).resolve()
+            if path.is_file():
+                return path, is_full
+        raise PoseAtlasError(
+            f"人像图片缺失：{image.get('thumb') or image.get('full')}\n"
+            "请重新完整拉取仓库（portrait/thumbs 目录）。"
+        )
+
+    def image_size(self, image: dict) -> tuple[int, int]:
+        path, is_full = self.image_path(image)
+        if is_full:
+            return int(image.get("w") or 0), int(image.get("h") or 0)
+        return int(image.get("thumb_w") or 0), int(image.get("thumb_h") or 0)
+
+
+_COSTUME_INSTANCE = CostumeAtlas()
+_PORTRAIT_INSTANCE = PortraitAtlas()
+
+
+def get_costume_atlas() -> CostumeAtlas:
+    return _COSTUME_INSTANCE
+
+
+def get_portrait_atlas() -> PortraitAtlas:
+    return _PORTRAIT_INSTANCE
+
+
+# ---------------------------------------------------------------------- 信息文本
+def build_costume_info(costume: dict, lang: str = DEFAULT_LANGUAGE) -> str:
+    from .tags import tag_name
+
+    atlas = get_costume_atlas()
+    tags = [tag_name(t, lang) for t in (costume.get("tags") or [])]
+    lines = [
+        f"id: {costume.get('id', '')}",
+        f"category: {costume.get('cat', '')}",
+        f"group: {costume.get('group', '')}",
+        f"color: {costume.get('color', '')}",
+        f"main: {costume.get('main', '')}",
+        f"label: {atlas.label(costume, lang)}",
+        "tags: " + ", ".join(tags),
+    ]
+    try:
+        path = atlas.image_path(costume)
+        lines.append(f"files: {path.name}")
+    except PoseAtlasError:
+        pass
+    return "\n".join(lines)
+
+
+def build_portrait_info(image: dict, lang: str = DEFAULT_LANGUAGE) -> str:
+    atlas = get_portrait_atlas()
+    style = (image.get("style") or "").strip()
+    lines = [
+        f"id: {image.get('id', '')}",
+        f"section: {image.get('sec', '')}",
+        f"hair: {image.get('hair', '')}",
+        f"label: {atlas.label(image, lang)}",
+    ]
+    if style:
+        lines.append(f"style: {style}")
+    try:
+        path, is_full = atlas.image_path(image)
+        lines.append(f"files: {path.name}")
+        w, h = atlas.image_size(image)
+        lines.append(f"size: {w} × {h}" + ("" if is_full else "  (缩略图；原图未下载)"))
+    except PoseAtlasError:
+        pass
     return "\n".join(lines)

@@ -426,7 +426,7 @@ npm start
 
 除了当静态站点，这个仓库也可以**直接放进 `ComfyUI/custom_nodes/`** 当自定义节点用：不复制图片、不装额外依赖、不影响原有的三个网页图鉴。
 
-> 当前节点覆盖 **姿势图鉴**（288 组 / 1,439 张）。衣装图鉴与人像图鉴目前只有网页版，节点接入留待后续版本。
+> 三个图鉴都接进了节点：姿势（288 组）、衣装（1,407 套）、人像（1,499 张）。
 
 ### 安装
 
@@ -435,19 +435,27 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
 ```
 
-或者直接把解压后的文件夹丢进 `custom_nodes/`（关键是 `__init__.py`、`data/poses.json`、`img/`、`thumbs/`、`web/` 要一起在）。然后**重启 ComfyUI**，节点出现在右键菜单的 **`RuiC/姿态图库 PoseAtlas`** 分类下。
+或者直接把解压后的文件夹丢进 `custom_nodes/`（关键是 `__init__.py`、`data/`、`img/`、`thumbs/`、`costume/`、`portrait/`、`web/` 要一起在）。然后**重启 ComfyUI**，节点在右键菜单的三个分类下：
+
+- **`RuiC/姿态图库 PoseAtlas`** —— 姿势三件套
+- **`RuiC/衣装图库 Costume`** —— 衣装
+- **`RuiC/人像图库 Portrait`** —— 人像
 
 - 依赖：**无**。只用 ComfyUI 自带的 torch / Pillow / aiohttp。
-- 启动开销：**几乎为零**。只在第一次用到节点时读一次 `data/poses.json`，不会扫描 1,439 张图。
+- 启动开销：**几乎为零**。数据 JSON 只在第一次用到对应图鉴时读一次，不会预扫几千张图。
 - 静态站点仍可照常部署，两种用法共享同一份数据与图片。
 
-### 三个节点
+### 七个节点
 
-| 节点 | 类名 | 输入 | 输出 |
-| --- | --- | --- | --- |
-| 姿态图库 · 加载 | `RuiCPoseAtlasLoad` | `pose`、`angle` | `image`、`mask`、`info` |
-| 姿态图库 · 随机 | `RuiCPoseAtlasRandom` | `series`、`category`、`angle`、`seed`、`control_after_generate` | `image`、`mask`、`info` |
-| 姿态图库 · 多视角 | `RuiCPoseAtlasAngles` | `pose`、`angles` | `image`、`mask`、`info` |
+| 图鉴 | 节点 | 类名 | 输入 | 输出 |
+| --- | --- | --- | --- | --- |
+| 姿势 | 加载 | `RuiCPoseAtlasLoad` | `pose`、`angle` | `image`、`mask`、`info` |
+| 姿势 | 随机 | `RuiCPoseAtlasRandom` | `series`、`category`、`angle`、`seed`、`control_after_generate` | `image`、`mask`、`info` |
+| 姿势 | 多视角 | `RuiCPoseAtlasAngles` | `pose`、`angles` | `image`、`mask`、`info` |
+| 衣装 | 加载 | `RuiCCostumeLoad` | `costume` | `image`、`mask`、`info` |
+| 衣装 | 随机 | `RuiCCostumeRandom` | `category`（季节）、`group`（品类）、`seed` | `image`、`mask`、`info` |
+| 人像 | 加载 | `RuiCPortraitLoad` | `portrait` | `image`、`mask`、`info` |
+| 人像 | 随机 | `RuiCPortraitRandom` | `section`（脸部/造型）、`hair`（发型）、`seed` | `image`、`mask`、`info` |
 
 **`pose` 下拉框**列出全部 288 组，格式为 `P001 / full_sexy / S形站姿・胯部侧顶`——编号和系列 key 是稳定标识，名称部分随语言变也不影响已保存的工作流。下拉框可以直接输入筛选：`P019`、`full_std`、`坐姿`、`M字`、任意中日英名称都能命中。
 
@@ -461,7 +469,17 @@ git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
 | `mask` | `B × 1200 × 900`，取**反相亮度**：白底 = 0，线稿越深越接近 1。原图是 RGB 没有 alpha，所以线稿遮罩用亮度反推，适合做局部重绘/叠加；需要人物剪影请自己再处理 |
 | `info` | 多行文本：id、编号、系列、分类、中日英名称、角度、文件名，便于接字符串节点或调试 |
 
-典型接法：`image` → ControlNet（lineart / canny）或 IPAdapter；`info` 里的编号可以直接拼进文件名做批量命名。
+**mask 的三种口径**
+
+| 图鉴 | mask | 说明 |
+| --- | --- | --- |
+| 姿势 | `1 − 亮度` | 线稿遮罩：白底 = 0，线条越深越接近 1，适合局部重绘 |
+| 衣装 | 背景色距离 | 取图片边框一圈的中位色当背景，按 RGB 距离归一化，衣服轮廓相当干净 |
+| 人像 | 全 1 | 照片没有天然遮罩，需要抠图请另接 `rembg` 等节点 |
+
+典型接法：`image` → ControlNet（lineart / canny）或 IPAdapter；衣装图本来就没有人体，可以直接套到已有角色上；`info` 里的编号可以直接拼进文件名做批量命名。
+
+> 人像图鉴的仓库只带 400×500 缩略图（原图约 4.5 GB 不入库）。节点优先读 `portrait/img/` 原图，没下载就自动回落到缩略图，`info` 会标注实际尺寸；想要原图先跑 `npm run fetch-faces`。
 
 ### 图库面板
 
@@ -473,9 +491,9 @@ git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
   <img src="docs/preview-comfyui-lightbox.jpg" alt="ComfyUI 大图浏览" width="72%">
 </p>
 
-- **侧边栏「姿态图库」**：左侧工具栏新增一个图片图标，打开就是缩略图网格；顶部可搜索、按系列/分类筛选，右上角切换 中 / EN / 日。
+- **侧边栏「参考图鉴」**：左侧工具栏新增一个图片图标，顶部「姿势 / 衣装 / 人像」一键切换三套图鉴；可搜索、按系列/分类筛选，右上角切换 中 / EN / 日。衣装卡片按 2:3、人像按 4:5 排布。
 - **点缩略图**开大图：`←` `→` 换角度，`↑` `↓` 换姿态，`Enter` 插入节点，`Esc` 关闭；缩略图右下角有悬浮「插入节点」按钮，一键上画布。
-- **智能复用，不堆节点**：工作流里没有图库节点时，「插入节点」才新建一个配好 `pose` + `angle` 的节点；已经有了就只把新姿态写进现有节点（画布上选中谁就更新谁，没选中就更新最近创建的那个），连线保持不动，不用删节点重新连。
+- **智能复用，不堆节点**：工作流里没有对应图鉴的节点时，「插入节点」才新建一个配好的节点；已经有了就只把新图写进现有节点（画布上选中谁就更新谁，没选中就更新最近创建的那个），连线保持不动，不用删节点重新连。三种图鉴各自复用各自的节点，互不干扰。
 - **节点上的「姿态图库」按钮**打开弹窗版图库；挑完写回当前节点的 `pose` / `angle`，适合先搭好工作流再换姿态。
 - 画布空白处**右键菜单**里也有入口。
 
@@ -483,14 +501,15 @@ git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
 
 ```text
 __init__.py            ComfyUI 入口：节点映射 + WEB_DIRECTORY + 路由注册
-poseatlas/core.py      poses.json 索引、选项解析、读图转张量
-poseatlas/nodes.py     三个节点
-poseatlas/routes.py    /poseatlas/api/index 与 /poseatlas/media/*
-web/poseatlas.js       侧边栏标签页、灯箱、弹窗、插入节点、节点内预览
+poseatlas/core.py      三套数据索引、选项解析、读图转张量（线稿 / 衣型 / 全 1 遮罩）
+poseatlas/tags.py      衣装标签三语词典（由 scripts/export-costume-tags.mjs 生成）
+poseatlas/nodes.py     七个节点
+poseatlas/routes.py    /poseatlas/api/{index,costumes,faces,tags} 与 /poseatlas/media/*
+web/poseatlas.js       侧边栏三图鉴切换、灯箱、弹窗、插入节点、节点内预览
 web/poseatlas.css      面板样式（全部 pa- 前缀，跟随 ComfyUI 主题深浅色）
 ```
 
-- **不复制图片**：`/poseatlas/media/img/xxx.png` 直接从节点目录读文件（`FileResponse`，7 天强缓存）。只允许 `img/` 与 `thumbs/` 两个目录，带路径穿越防护。
+- **不复制图片**：`/poseatlas/media/...` 直接从节点目录读文件（`FileResponse`，7 天强缓存）。只允许 `img/`、`thumbs/`、`costume/`、`portrait/` 四个目录，带路径穿越防护；人像原图缺失时服务端自动回落到缩略图。
 - **子路径友好**：前端用 `api.apiURL()` / `api.fetchApi()` 拼接地址，ComfyUI 挂在 `/comfyui/` 这类子路径下也能正常取图。
 - **样式不串味**：全部选择器带 `pa-` 前缀，颜色从 ComfyUI 的 theme 变量派生，浅色深色主题都能用。
 - **语言**：面板语言写进 `localStorage`，与网页版互不影响。
@@ -503,9 +522,10 @@ web/poseatlas.css      面板样式（全部 pa- 前缀，跟随 ComfyUI 主题�
 RuiC-PoseAtlas/
 ├── __init__.py                 # ComfyUI 节点入口（节点映射 / WEB_DIRECTORY / 路由）
 ├── poseatlas/
-│   ├── core.py                 # poses.json 索引、选项解析、读图转张量
-│   ├── nodes.py                # 三个节点：Load / Random / Angles
-│   └── routes.py               # /poseatlas/api/index、/poseatlas/media/*
+│   ├── core.py                 # 三套数据索引、选项解析、读图转张量
+│   ├── tags.py                 # 衣装标签三语词典（脚本生成）
+│   ├── nodes.py                # 七个节点：姿势 ×3 / 衣装 ×2 / 人像 ×2
+│   └── routes.py               # /poseatlas/api/*、/poseatlas/media/*
 ├── web/
 │   ├── poseatlas.js            # ComfyUI 前端扩展：侧边栏图库 / 灯箱 / 插入节点 / 节点内预览
 │   └── poseatlas.css           # 面板样式（pa- 前缀，跟随 ComfyUI 主题）
