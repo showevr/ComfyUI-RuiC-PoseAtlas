@@ -3,9 +3,10 @@
 原来这里只是一个纯静态站点（index.html + assets + data + img + thumbs），
 放进 custom_nodes 也不会被 ComfyUI 识别。现在补上三件事：
 
-  1. 节点：Load / Random / Angles，把姿态参考图直接输出成 IMAGE + MASK；
-  2. 路由：/poseatlas/api/index、/poseatlas/media/*，让前端能读到数据和原图；
-  3. 前端扩展：侧边栏「姿态图库」面板 + 节点上的「浏览图库」按钮。
+  1. 节点：三图鉴的 Load / Random / Angles（IMAGE + MASK + info + 智能连接提示词），
+     外加「智能连接提示词」节点，把多张参考图的顺序整理成一句提示词；
+  2. 路由：/poseatlas/api/index、/poseatlas/api/costumes|faces|tags、/poseatlas/media/*；
+  3. 前端扩展：侧边栏「参考图鉴」面板 + 节点上的「浏览图库」按钮 + 节点内预览。
 
 静态站点本身仍然可以直接部署到 GitHub Pages / Cloudflare Pages，互不影响。
 """

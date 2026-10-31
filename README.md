@@ -440,22 +440,28 @@ git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
 - **`RuiC/姿态图库 PoseAtlas`** —— 姿势三件套
 - **`RuiC/衣装图库 Costume`** —— 衣装
 - **`RuiC/人像图库 Portrait`** —— 人像
+- **`RuiC/智能提示词 Smart Prompt`** —— 智能连接提示词（把上面三种参考图拼成一句提示词）
 
 - 依赖：**无**。只用 ComfyUI 自带的 torch / Pillow / aiohttp。
 - 启动开销：**几乎为零**。数据 JSON 只在第一次用到对应图鉴时读一次，不会预扫几千张图。
 - 静态站点仍可照常部署，两种用法共享同一份数据与图片。
 
-### 七个节点
+### 八个节点
 
 | 图鉴 | 节点 | 类名 | 输入 | 输出 |
 | --- | --- | --- | --- | --- |
-| 姿势 | 加载 | `RuiCPoseAtlasLoad` | `pose`、`angle` | `image`、`mask`、`info` |
-| 姿势 | 随机 | `RuiCPoseAtlasRandom` | `series`、`category`、`angle`、`seed`、`control_after_generate` | `image`、`mask`、`info` |
-| 姿势 | 多视角 | `RuiCPoseAtlasAngles` | `pose`、`angles` | `image`、`mask`、`info` |
-| 衣装 | 加载 | `RuiCCostumeLoad` | `costume` | `image`、`mask`、`info` |
-| 衣装 | 随机 | `RuiCCostumeRandom` | `category`（季节）、`group`（品类）、`seed` | `image`、`mask`、`info` |
-| 人像 | 加载 | `RuiCPortraitLoad` | `portrait` | `image`、`mask`、`info` |
-| 人像 | 随机 | `RuiCPortraitRandom` | `section`（脸部/造型）、`hair`（发型）、`seed` | `image`、`mask`、`info` |
+| 姿势 | 加载 | `RuiCPoseAtlasLoad` | `pose`、`angle` | `image`、`mask`、`智能连接提示词`、`info` |
+| 姿势 | 随机 | `RuiCPoseAtlasRandom` | `series`、`category`、`angle`、`seed`、`control_after_generate` | `image`、`mask`、`智能连接提示词`、`info` |
+| 姿势 | 多视角 | `RuiCPoseAtlasAngles` | `pose`、`angles` | `image`、`mask`、`智能连接提示词`、`info` |
+| 衣装 | 加载 | `RuiCCostumeLoad` | `costume` | `image`、`mask`、`智能连接提示词`、`info` |
+| 衣装 | 随机 | `RuiCCostumeRandom` | `category`（季节）、`group`（品类）、`seed` | `image`、`mask`、`智能连接提示词`、`info` |
+| 人像 | 加载 | `RuiCPortraitLoad` | `portrait` | `image`、`mask`、`智能连接提示词`、`info` |
+| 人像 | 随机 | `RuiCPortraitRandom` | `section`（脸部/造型）、`hair`（发型）、`seed` | `image`、`mask`、`智能连接提示词`、`info` |
+| 智能提示词 | 智能连接提示词 | `RuiCSmartPrompt` | `连接 1`–`连接 6`、`标签样式`、`语言`、`句式模板`、`自定义标签`、`自定义句式`、`编号方式`、`拼图高度`、`补充提示词` | `提示词`、`拼图` |
+
+> `智能连接提示词` 是七个图库节点共用的第三个输出（在 `mask` 下面，`info` 上面）。
+> 它只带这条参考图的身份（姿势 / 衣装 / 人像 + 编号）和这张图的引用，**不额外拷贝图片**，
+> 所以「智能连接提示词」节点的提示词和拼图两个功能，**每个图库节点只需连这一根线**。
 
 **`pose` 下拉框**列出全部 288 组，格式为 `P001 / full_sexy / S形站姿・胯部侧顶`——编号和系列 key 是稳定标识，名称部分随语言变也不影响已保存的工作流。下拉框可以直接输入筛选：`P019`、`full_std`、`坐姿`、`M字`、任意中日英名称都能命中。
 
@@ -480,6 +486,91 @@ git clone https://github.com/HRuiCcc/RuiC-PoseAtlas.git
 典型接法：`image` → ControlNet（lineart / canny）或 IPAdapter；衣装图本来就没有人体，可以直接套到已有角色上；`info` 里的编号可以直接拼进文件名做批量命名。
 
 > 人像图鉴的仓库只带 400×500 缩略图（原图约 4.5 GB 不入库）。节点优先读 `portrait/img/` 原图，没下载就自动回落到缩略图，`info` 会标注实际尺寸；想要原图先跑 `npm run fetch-faces`。
+
+### 智能连接提示词
+
+多参考图生图（Qwen-Image-Edit / Nano Banana / Flux Kontext / SD 系列）最难的是「哪张图是哪张」。
+`智能连接提示词` 就是干这个的：把图库节点的 `智能连接提示词` 输出按你连接的顺序编号，套进一句现成的话。
+
+```
+默认句式「指令式（参考图 + 指令）」：
+
+姿势 → 衣装 → 人像 接进 1 / 2 / 3
+→ 参照 <image3> 中的人物外貌与身份，采用 <image1> 中的姿势与肢体动作，穿着 <image2> 中的整套服装，生成一张完整的人物照片。
+
+人像 → 姿势 → 衣装 接进 1 / 2 / 3
+→ 参照 <image1> 中的人物外貌与身份，采用 <image2> 中的姿势与肢体动作，穿着 <image3> 中的整套服装，生成一张完整的人物照片。
+
+换成「人物 · 姿势 · 服装」：
+→ <image3>的人物以<image1>的姿势穿上<image2>的服装
+```
+
+**用法**
+
+1. 把「姿态 / 衣装 / 人像图库」节点的 **`智能连接提示词`** 输出，拖到 `智能连接提示词` 节点的 `连接 1`–`连接 6`（最多 6 张，同一类可以接多张）；
+2. 选 **`标签样式`**（默认 `<image*>`，即 `<image1>` / `<image2>` …）：`<image*>` / `图片*` / `<图片*>` / `自定义`（自定义里写 `image*`，`*` 会被换成序号）；
+3. 选 **`句式模板`**（默认 `指令式（参考图 + 指令）`），输出 `提示词` 拖给正面提示词即可。节点里会实时显示生成结果，右上角有「复制」。
+
+**四种句式**
+
+| 句式 | 输出示例 | 适合 |
+| --- | --- | --- |
+| 人物 · 姿势 · 服装 | `<image3>的人物以<image1>的姿势穿上<image2>的服装` | Qwen / Nano Banana 等中文指令模型 |
+| 指令式（参考图 + 指令）**（默认）** | `参照 <image3> 中的人物外貌与身份，采用 <image1> 中的姿势与肢体动作，穿着 <image2> 中的整套服装，生成一张完整的人物照片。` | 需要完整指令句的模型 |
+| 标签式（SDXL / Flux） | `person: <image3>, pose: <image1>, outfit: <image2>` | 吃英文标签的模型 |
+| 自定义 | 自己写，用 `{人物}` / `{姿势}` / `{服装}` 占位 | 任意 |
+
+**几个规则**
+
+- **编号**默认按「接到本节点的顺序」自动紧凑编号（第一个接进来的 = `<image1>`），所以要让图片送进模型的顺序保持一致；想固定成端口号就切 `编号方式` → `按端口编号（1 – 6）`。
+- **同类多张**会并列：两个姿势 = `以<image1>、<image2>的姿势…`。
+- **缺哪类就省哪一句**：只接衣装 + 人像 = `<image2>的人物穿上<image1>的服装`。
+- `补充提示词` 会追加在末尾（如「全身，工作室灯光」）。
+- 下拉框留空（比如旧工作流在新版本里恢复）不会报错，节点会按默认值跑；填了列表里没有的值才会提示。
+
+**`语言` 参数（生成文本的三语输出）**
+
+`智能连接提示词` 节点有一个 `语言` 控件（中文 / English / 日本語），控制**生成出来的提示词**用哪种语言写：
+
+| 语言 | 「人物 · 姿势 · 服装」 | 「指令式（参考图 + 指令）」 |
+| --- | --- | --- |
+| 中文 | `<image3>的人物以<image1>的姿势穿上<image2>的服装` | `参照 <image3> 中的人物外貌与身份，…生成一张完整的人物照片。` |
+| English | `the person from <image3> in the pose of <image1> wearing the outfit from <image2>` | `Reference the person's appearance and identity from <image3>, … generate a full photograph of this person.` |
+| 日本語 | `<image3>の人物が<image1>のポーズで<image2>の衣装を着た` | `<image3> の人物の外見と雰囲気を参照し、…完全な写真を一枚生成してください。` |
+
+`自定义` 句式不受语言影响（占位符 `{人物}` / `{姿势}` / `{服装}` 原样替换）。
+
+**界面语言联动（中 / EN / 日）**
+
+侧边栏图鉴面板右上角的中 / EN / 日 开关不只管面板：**画布上所有 RuiC 节点的标题、控件标签、
+端口名、下拉框选项都会跟着一起切换**（例如 `姿态图库 · 加载` ↔ `Pose Atlas · Load` ↔ `ポーズ図鑑・ロード`）。
+具体包括：
+
+- 节点标题与所有控件标签（`句式模板` ↔ `Template` ↔ `テンプレート` 等）；
+- 四个下拉框（`标签样式` / `句式模板` / `编号方式` / `拼图高度`）的**选项列表和当前值**一起翻译
+  （如 `指令式（参考图 + 指令）` ↔ `Instructional (Refs + Directive)` ↔ `指令型（参照画像 + 指示）`），
+  输出内容同步变化（`标签样式` 选 `图片*` 在 EN 下生成 `Image1`、在日文下生成 `画像1`）；
+- 节点 `语言` 控件自动跟总开关同步（仍可手动改，只影响该节点输出）；
+- 输入 / 输出端口显示名：`连接 1`–`6` ↔ `Link 1`–`6` ↔ `参考 1`–`6`，
+  `image` / `mask` / `智能连接提示词` / `info` ↔ `图像` / `遮罩` / `智能连接提示词` / `信息`（日文同理）；
+- **侧边栏按钮下方的标题**（`参考图鉴` ↔ `Atlas` ↔ `図鑑`）实时跟随切换。
+
+这只改显示文本——控件 key、连线类型、端口内部 name 都保持标准值不变，工作流完全兼容，随时来回切。
+下拉框的「值」会随语言保存（工作流里可能是英文值），Python 端会把任何语言的值归一成中文标准值再执行，
+所以怎么存都能跑。两个小限制：新建节点搜索菜单里的名字在页面刷新后才跟随当前语言；
+`自定义` 句式 / 标签的内容是用户自己写的，不做翻译。
+
+**`拼图` 输出**（给只接受一张参考图的模型）
+
+同一个节点的第二个输出会把接入的参考图**按同一高度从左到右拼成一张**，白底、图间留 12px 白缝，
+并且**在每张图下方标注它对应的标签**（`<image1>` / `图片2` / 自定义 `ref3`，跟提示词里的写法完全一致），
+这样模型一眼就能对上「哪块是哪张」。
+
+- `拼图高度`：`自动（取最矮，不放大）` 会按最矮那张对齐，**不会把任何一张放大**（最保真）；
+  也可以固定成 `768` / `1024` / `1536` / `2048`（矮的图会被放大，可能变糊）。
+- 三张图（姿势 900×1200 + 衣装 1366×2048 + 人像 1122×1402）在「自动」下约 **1132 × 545**，固定 1024 时约 **2294 × 1116**。
+- 多视角节点 / `angle=all` 这种 batch 输出，拼图只取**第一张**。
+- 拼图不会写盘，也不占 ui 预览；想看效果就把它接到 `PreviewImage` 或 `Save Image`。
 
 ### 图库面板
 
@@ -689,6 +780,8 @@ npm run fetch-faces    # 人像：从原站下载 1,499 张原图 + 缩略图到
 `fetch-images` 会从 `data/poses.json` 收集全部姿势图片路径，并发下载缺失文件（已存在且签名正确的自动跳过），校验文件签名，失败自动切换源并重试。衣装图片体积较小且使用 WEBP，未纳入该脚本；缺失时按上表路径从原作重新获取即可。
 
 `fetch-faces` 会读取 `data/faces.json`，并发下载 1,499 张缩略图与 1,499 张全尺寸 PNG。**`portrait/img/` 体积约 4.5 GB，已加入 `.gitignore`**：它只存在于本地，用于离线浏览与直接保存原图；线上页面在非 localhost 环境自动使用 `full_remote`，从原站加载全尺寸图。
+
+> 没装 Node.js 也能下载：Windows 下运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-faces.ps1`（支持 `-ThumbsOnly`、`-Limit N`、`-Force`，已完成文件自动跳过，可重复运行续传）。文件落到 `portrait/img/<id>.png` 即被 ComfyUI 节点自动识别，无需改配置。
 
 > 部分克隆（`git sparse-checkout` 只取代码）下没有 `img/` 与 `thumbs/`，可用 `SKIP_POSE_IMAGES=1 npm run verify` 跳过姿势图检查，衣装图与数据仍会完整校验。
 

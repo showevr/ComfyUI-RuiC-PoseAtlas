@@ -816,3 +816,70 @@ body.pa-lightbox-open {
 .pa-card--portrait .pa-shot {
   aspect-ratio: 4 / 5;
 }
+
+/* ================================================================
+   智能连接提示词 · 节点内文本预览
+   ================================================================ */
+
+.pa-ppreview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--pa-line-strong, rgba(128, 128, 128, 0.3));
+  background: var(--pa-surface, rgba(128, 128, 128, 0.08));
+  color: var(--fg-color, var(--p-text-color, #222));
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+.pa-ppreview__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.pa-ppreview__slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pa-ppreview__chip {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--pa-accent, #5b8cff);
+  background: var(--pa-accent-soft, rgba(91, 140, 255, 0.16));
+}
+
+.pa-ppreview__copy {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--pa-line-strong, rgba(128, 128, 128, 0.3));
+}
+
+.pa-ppreview__copy:hover {
+  background: var(--pa-surface-hover, rgba(128, 128, 128, 0.14));
+}
+
+.pa-ppreview__text {
+  flex: 1 1 auto;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+}

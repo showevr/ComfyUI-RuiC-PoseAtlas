@@ -21,6 +21,132 @@ const NODE_POSE_LOAD = "RuiCPoseAtlasLoad";
 const NODE_POSE_ANGLES = "RuiCPoseAtlasAngles";
 const NODE_COSTUME_LOAD = "RuiCCostumeLoad";
 const NODE_PORTRAIT_LOAD = "RuiCPortraitLoad";
+const NODE_SMART_PROMPT = "RuiCSmartPrompt";
+
+// 智能连接提示词节点：哪个下拉框选中哪个值，才显示哪个自定义输入框
+// （值随界面语言翻译，所以「自定义」要认全三种语言的写法）
+const PROMPT_TOGGLES = [
+  { watch: "句式模板", when: ["自定义", "Custom", "カスタム"], target: "自定义句式" },
+  { watch: "标签样式", when: ["自定义", "Custom", "カスタム"], target: "自定义标签" },
+];
+
+/**
+ * 下拉框的默认值。旧工作流在新版里恢复时，新增/改过默认的控件可能拿到空值，
+ * 服务端会直接判「Value not in list」并拒绝整张图，所以加载节点时纠一遍。
+ */
+const PROMPT_COMBO_DEFAULTS = {
+  标签样式: "<image*>",
+  句式模板: "指令式（参考图 + 指令）",
+  编号方式: "按连接顺序（自动紧凑）",
+  拼图高度: "自动（取最矮，不放大）",
+};
+
+/** 七个图库节点（用来判断连线的源头是不是我们自己的节点） */
+const ATLAS_NODE_TYPES = new Set([
+  NODE_POSE_LOAD,
+  "RuiCPoseAtlasRandom",
+  NODE_POSE_ANGLES,
+  NODE_COSTUME_LOAD,
+  "RuiCCostumeRandom",
+  NODE_PORTRAIT_LOAD,
+  "RuiCPortraitRandom",
+]);
+
+/**
+ * 端口顺序调整（智能连接提示词 从 info 下面挪到 mask 下面）之后，
+ * 旧工作流里连好的线会错位到 info 端口，这里在加载时把它们拨回新端口。
+ */
+function migratePromptLinks(node) {
+  const graph = node.graph;
+  if (!graph || !graph.links) return false;
+  let fixed = 0;
+  (node.inputs || []).forEach((input) => {
+    const linkId = input.link;
+    if (linkId == null) return;
+    const link = typeof graph.links.get === "function" ? graph.links.get(linkId) : graph.links[linkId];
+    if (!link || link.origin_id == null) return;
+    const origin = graph.getNodeById ? graph.getNodeById(link.origin_id) : null;
+    if (!origin || !origin.outputs) return;
+    const kind = origin.constructor?.nodeData?.name || origin.type;
+    if (!ATLAS_NODE_TYPES.has(kind)) return;
+    // 端口名会随语言翻译，这里按固定序号判断，不按名字找
+    if (link.origin_slot === NEW_LINK_SLOT) return;
+    // 只搬「旧版本连到 info 端口」的线，别的错位不动，免得误伤
+    if (link.origin_slot !== OLD_INFO_SLOT) return;
+    const cur = origin.outputs[link.origin_slot];
+    if (cur && Array.isArray(cur.links)) cur.links = cur.links.filter((id) => id !== linkId);
+    const out = origin.outputs[NEW_LINK_SLOT];
+    out.links = Array.isArray(out.links) ? out.links : [];
+    if (!out.links.includes(linkId)) out.links.push(linkId);
+    link.origin_slot = NEW_LINK_SLOT;
+    if (out.type) link.type = out.type;
+    fixed += 1;
+  });
+  if (fixed) node.setDirtyCanvas?.(true, true);
+  return fixed > 0;
+}
+
+/**
+ * 端口顺序调整前的旧序号 → 新序号。旧版是 image/mask/info/智能连接提示词，
+ * 新版把「智能连接提示词」提到了 mask 下面，info 挪到最后。
+ * 按连线上记录的类型来判断，避免把新版本保存的线又拨回去。
+ */
+const OLD_LINK_SLOT = 3;   // 旧版「智能连接提示词」
+const NEW_LINK_SLOT = 2;
+const OLD_INFO_SLOT = 2;   // 旧版 info
+const NEW_INFO_SLOT = 3;
+
+function migrateLegacyLinkSlots(data) {
+  if (!data || !Array.isArray(data.links) || !Array.isArray(data.nodes)) return 0;
+  const ids = new Set();
+  data.nodes.forEach((n) => {
+    if (n && ATLAS_NODE_TYPES.has(n.type)) ids.add(String(n.id));
+  });
+  if (!ids.size) return 0;
+  let fixed = 0;
+  data.links.forEach((l) => {
+    if (!l) return;
+    const isArray = Array.isArray(l);
+    const originId = isArray ? l[1] : l.origin_id;
+    if (!ids.has(String(originId))) return;
+    const slot = isArray ? l[2] : l.origin_slot;
+    const type = isArray ? l[5] : l.type;
+    let next = null;
+    if (type === "PA_PROMPT_LINK" && slot === OLD_LINK_SLOT) next = NEW_LINK_SLOT;
+    else if (type === "STRING" && slot === OLD_INFO_SLOT) next = NEW_INFO_SLOT;
+    if (next == null) return;
+    if (isArray) l[2] = next;
+    else l.origin_slot = next;
+    fixed += 1;
+  });
+  return fixed;
+}
+
+function normalizePromptCombos(node) {
+  if (!node) return false;
+  let changed = false;
+  Object.entries(PROMPT_COMBO_DEFAULTS).forEach(([name, fallback]) => {
+    const w = findWidget(node, [name]);
+    if (!w) return;
+    const values = Array.isArray(w.options?.values) ? w.options.values : null;
+    if (values && values.length) {
+      if (values.includes(w.value)) return;
+      w.value = values.includes(fallback) ? fallback : values[0];
+    } else if (w.value !== "" && w.value != null) {
+      return;
+    } else {
+      w.value = fallback;
+    }
+    changed = true;
+    try {
+      w.callback?.(w.value, app.canvas, node);
+    } catch (err) {
+      /* 回调只是顺手通知，失败无碍 */
+    }
+  });
+  if (changed) node.setDirtyCanvas?.(true, true);
+  return changed;
+}
 
 /** 带「浏览图库」按钮 + 节点内预览的节点 */
 const PICKER_NODES = [NODE_POSE_LOAD, NODE_POSE_ANGLES, NODE_COSTUME_LOAD, NODE_PORTRAIT_LOAD];
@@ -247,6 +373,230 @@ function pickName(obj, lang = store.lang) {
   return names[lang] || names.zh || names.en || names.ja || (obj && obj.key) || "";
 }
 
+/* ------------------------------------------------------------------ 节点界面翻译
+   跟随面板语言开关（中 / EN / 日）切换节点标题、控件标签与输出端口名的「显示文本」。
+   只改显示：控件 key（widget.name）、下拉框选项值、端口类型都不动，工作流完全兼容。 */
+const NODE_I18N = {
+  [NODE_POSE_LOAD]: { zh: "姿态图库 · 加载", en: "Pose Atlas · Load", ja: "ポーズ図鑑・ロード" },
+  "RuiCPoseAtlasRandom": { zh: "姿态图库 · 随机", en: "Pose Atlas · Random", ja: "ポーズ図鑑・ランダム" },
+  [NODE_POSE_ANGLES]: { zh: "姿态图库 · 多视角", en: "Pose Atlas · Angles", ja: "ポーズ図鑑・多アングル" },
+  [NODE_COSTUME_LOAD]: { zh: "衣装图库 · 加载", en: "Costume Atlas · Load", ja: "衣装図鑑・ロード" },
+  "RuiCCostumeRandom": { zh: "衣装图库 · 随机", en: "Costume Atlas · Random", ja: "衣装図鑑・ランダム" },
+  [NODE_PORTRAIT_LOAD]: { zh: "人像图库 · 加载", en: "Portrait Atlas · Load", ja: "ポートレート図鑑・ロード" },
+  "RuiCPortraitRandom": { zh: "人像图库 · 随机", en: "Portrait Atlas · Random", ja: "ポートレート図鑑・ランダム" },
+  [NODE_SMART_PROMPT]: { zh: "智能连接提示词", en: "Smart Prompt Link", ja: "スマート接続プロンプト" },
+};
+
+const WIDGET_I18N = {
+  en: {
+    pose: "Pose", angle: "Angle", series: "Series", category: "Category",
+    group: "Group", seed: "Seed", angles: "Angles", costume: "Costume",
+    portrait: "Portrait", section: "Section", hair: "Hair",
+    "连接 1": "Link 1", "连接 2": "Link 2", "连接 3": "Link 3",
+    "连接 4": "Link 4", "连接 5": "Link 5", "连接 6": "Link 6",
+    "标签样式": "Label Style", "语言": "Language", "句式模板": "Template",
+    "自定义标签": "Custom Label", "自定义句式": "Custom Template",
+    "编号方式": "Numbering", "拼图高度": "Montage Height", "补充提示词": "Extra Prompt",
+  },
+  ja: {
+    pose: "ポーズ", angle: "アングル", series: "シリーズ", category: "カテゴリ",
+    group: "カテゴリ", seed: "シード", angles: "アングル一覧", costume: "衣装",
+    portrait: "ポートレート", section: "パーツ", hair: "髪型",
+    "连接 1": "参考 1", "连接 2": "参考 2", "连接 3": "参考 3",
+    "连接 4": "参考 4", "连接 5": "参考 5", "连接 6": "参考 6",
+    "标签样式": "ラベル形式", "语言": "言語", "句式模板": "テンプレート",
+    "自定义标签": "カスタムラベル", "自定义句式": "カスタムテンプレート",
+    "编号方式": "採番方式", "拼图高度": "モンタージュ高さ", "补充提示词": "追加プロンプト",
+  },
+};
+const WIDGET_I18N_KEYS = new Set(Object.keys(WIDGET_I18N.en));
+
+/* 智能连接提示词四个下拉框的三语选项（与 Python 端 OPTION_ALIASES 一一对应，
+   标准值 = 中文）。切换界面语言时把「选项列表」和「当前值」一起翻过去，
+   Python 端会把任何语言的值归一回中文标准值，所以工作流怎么存都能执行。 */
+const COMBO_I18N = {
+  "标签样式": {
+    zh: ["<image*>", "图片*", "<图片*>", "自定义"],
+    en: ["<image*>", "Image*", "<Image*>", "Custom"],
+    ja: ["<image*>", "画像*", "<画像*>", "カスタム"],
+  },
+  "句式模板": {
+    zh: ["人物 · 姿势 · 服装（默认）", "指令式（参考图 + 指令）", "标签式（SDXL / Flux）", "自定义"],
+    en: ["Character · Pose · Outfit (Default)", "Instructional (Refs + Directive)", "Tag Style (SDXL / Flux)", "Custom"],
+    ja: ["人物・ポーズ・衣装（デフォルト）", "指令型（参照画像 + 指示）", "タグ形式（SDXL / Flux）", "カスタム"],
+  },
+  "编号方式": {
+    zh: ["按连接顺序（自动紧凑）", "按端口编号（1 – 6）"],
+    en: ["By connection order (compact)", "By port number (1 – 6)"],
+    ja: ["接続順（自動コンパクト）", "ポート番号順（1 – 6）"],
+  },
+  "拼图高度": {
+    zh: ["自动（取最矮，不放大）", "768", "1024", "1536", "2048"],
+    en: ["Auto (shortest, no upscale)", "768", "1024", "1536", "2048"],
+    ja: ["自動（最も低い高さに揃える）", "768", "1024", "1536", "2048"],
+  },
+};
+
+/** 节点「语言」控件的值（固定中文写法，便于序列化），随界面语言同步 */
+const LANG_WIDGET_VALUE = { zh: "中文", en: "English", ja: "日本語" };
+
+/* 端口显示名（label）。name 保持中文标准值不动（恢复工作流按序号匹配），
+   label 才是新前端 / 画布实际渲染的文本，两种渲染路径都优先显示 label。 */
+const PORT_I18N = {
+  zh: {
+    image: "图像", mask: "遮罩", "智能连接提示词": "智能连接提示词", info: "信息",
+    "提示词": "提示词", "拼图": "拼图",
+  },
+  en: {
+    image: "image", mask: "mask", "智能连接提示词": "Smart Prompt", info: "info",
+    "提示词": "Prompt", "拼图": "Montage",
+  },
+  ja: {
+    image: "画像", mask: "マスク", "智能连接提示词": "スマート接続プロンプト", info: "情報",
+    "提示词": "プロンプト", "拼图": "モンタージュ",
+  },
+};
+
+// 图库按钮在三种语言下的文案（反查按钮 widget 用）
+const PICKER_LABELS = new Set([
+  "姿态图库", "衣装图库", "人像图库",
+  "Pose Atlas", "Costume Atlas", "Portrait Atlas",
+  "ポーズ図鑑", "衣装図鑑", "ポートレート図鑑",
+]);
+
+// 输出端口方案：按「序号 + 类型」匹配，不受端口名被翻译的影响
+const ATLAS_OUTPUT_PLAN = [
+  { type: "IMAGE", name: "image" },
+  { type: "MASK", name: "mask" },
+  { type: "PA_PROMPT_LINK", name: "智能连接提示词" },
+  { type: "STRING", name: "info" },
+];
+const SMART_OUTPUT_PLAN = [
+  { type: "STRING", name: "提示词" },
+  { type: "IMAGE", name: "拼图" },
+];
+
+/** 把下拉框的值按界面语言翻译（任何语言的值都能认出来）。认不出就原样返回。 */
+function translateComboValue(widgetName, value, lang) {
+  const table = COMBO_I18N[widgetName];
+  if (!table || value == null) return value;
+  const str = String(value);
+  for (const code of Object.keys(table)) {
+    const idx = table[code].indexOf(str);
+    if (idx !== -1) return table[lang][idx];
+  }
+  return str;
+}
+
+/** 把一个节点的标题 / 控件标签 / 端口名应用成当前语言。返回是否有改动。 */
+function applyNodeLang(node) {
+  if (!node) return false;
+  const lang = store.lang;
+  let changed = false;
+
+  // 标题：只覆盖「默认标题」或我们上次写入的标题；用户自己改名过的节点不动
+  const titles = NODE_I18N[node.type];
+  if (titles) {
+    const want = titles[lang] || titles.zh;
+    if (!node.__paTitleApplied || node.title === node.__paTitleApplied) {
+      if (node.title !== want) changed = true;
+      node.title = want;
+      node.__paTitleApplied = want;
+    }
+  }
+
+  // 控件标签：widget.name 是工作流 key，保持不变；只换显示用的 label
+  // 注意：新前端的 widget 是访问器对象，label 不一定是自有属性，delete 不可靠，
+  // 所以中文模式直接把 label 设回 name 本身。
+  const portNames = PORT_I18N[lang] || {};
+  // 「浏览图库」按钮跟着切语言（按钮不序列化，按三语文案反查它）
+  const pickerSpec = PREVIEW_SPECS[node.type];
+  if (pickerSpec) {
+    const key = `picker${pickerSpec.atlas[0].toUpperCase()}${pickerSpec.atlas.slice(1)}`;
+    const want = t(key);
+    for (const w of node.widgets || []) {
+      if (!w || w.type !== "button" || !PICKER_LABELS.has(w.name)) continue;
+      if ((w.label ?? w.name) !== want) changed = true;
+      w.label = want;
+    }
+  }
+  for (const w of node.widgets || []) {
+    if (!w || !w.name || w.type === "button") continue;
+    if (!WIDGET_I18N_KEYS.has(w.name)) continue;
+    const want = (WIDGET_I18N[lang] && WIDGET_I18N[lang][w.name]) || w.name;
+    const cur = w.label ?? w.name;
+    if (cur !== want) changed = true;
+    w.label = want;
+
+    // 这四个下拉框的「选项列表 + 当前值」一起翻译（值翻译 = 输出内容跟着切语言；
+    // Python 端会把任何语言的值归一回中文标准值，序列化兼容）
+    const table = COMBO_I18N[w.name];
+    if (table) {
+      const wantValues = table[lang] || table.zh;
+      if (w.options && Array.isArray(w.options.values)) {
+        w.options.values = wantValues.slice();
+      }
+      const translated = translateComboValue(w.name, w.value, lang);
+      if (translated !== w.value) {
+        w.value = translated;
+        changed = true;
+      }
+    }
+    // 「语言」控件跟界面总开关同步（仍可手动改，只影响该节点输出）
+    if (w.name === "语言" && w.value !== LANG_WIDGET_VALUE[lang]) {
+      w.value = LANG_WIDGET_VALUE[lang];
+      changed = true;
+    }
+  }
+
+  // 输入端口名（连接 1–6 这类纯连线端口）：name 是标准值不动，显示走 label
+  for (const inp of node.inputs || []) {
+    if (!inp || inp.widget || !inp.name) continue;
+    if (!/^连接 \d+$/.test(inp.name)) continue;
+    const want = (WIDGET_I18N[lang] && WIDGET_I18N[lang][inp.name]) || inp.name;
+    const cur = inp.label ?? inp.name;
+    if (cur !== want) changed = true;
+    inp.label = want;
+  }
+
+  // 输出端口名：按「序号 + 类型」匹配（端口名被翻译过也不会错位），
+  // name 重置回中文标准值（序列化稳定），显示文本放 label
+  const plan = ATLAS_NODE_TYPES.has(node.type)
+    ? ATLAS_OUTPUT_PLAN
+    : node.type === NODE_SMART_PROMPT
+      ? SMART_OUTPUT_PLAN
+      : null;
+  if (plan) {
+    (node.outputs || []).forEach((o, i) => {
+      if (!o) return;
+      const spec = plan[i] || plan.find((p) => p.type === o.type);
+      if (!spec) return;
+      if (o.name !== spec.name) {
+        o.name = spec.name;
+        changed = true;
+      }
+      const wantLabel = portNames[spec.name] || spec.name;
+      if ((o.label ?? o.name) !== wantLabel) changed = true;
+      o.label = wantLabel;
+    });
+  }
+  return changed;
+}
+
+/** 画布上所有我们的节点都应用一遍当前语言（切换语言时调用）。 */
+function applyAllNodeLang() {
+  try {
+    const graph = app.graph;
+    const nodes = (graph && (graph._nodes || graph.nodes)) || [];
+    let changed = false;
+    for (const n of nodes) changed = applyNodeLang(n) || changed;
+    if (changed) app.canvas?.setDirtyCanvas?.(true, true);
+  } catch (err) {
+    console.warn(LOG, "节点语言切换失败", err);
+  }
+}
+
+
 function mediaUrl(relPath) {
   const clean = String(relPath || "").replace(/^\/+/, "");
   return api.apiURL(`/poseatlas/media/${clean}`);
@@ -461,6 +811,26 @@ function angleLabel(key) {
   return names ? names[store.lang] || names.en || names.zh || key : key;
 }
 
+/** 侧边栏 tab 按钮的标题 / 提示跟随语言切换。
+ *  registerSidebarTab 的 title 是注册时一次性写入的，切换语言后从
+ *  extensionManager.sidebarTab.sidebarTabs（Vue 响应式数组）里拿回同一个
+ *  tab 对象的代理，直接改 title / tooltip 即可让按钮文字实时更新。 */
+function refreshSidebarTabLang() {
+  try {
+    const svc = app.extensionManager?.sidebarTab;
+    const tabs = svc?.sidebarTabs;
+    if (!tabs || typeof tabs.find !== "function") return;
+    const tab = tabs.find((x) => x && x.id === TAB_ID);
+    if (!tab) return;
+    const wantTitle = t("tabTitle");
+    const wantTooltip = t("tabTooltip");
+    if (tab.title !== wantTitle) tab.title = wantTitle;
+    if (wantTooltip && tab.tooltip !== wantTooltip) tab.tooltip = wantTooltip;
+  } catch (err) {
+    console.warn(LOG, "侧边栏标题切换失败", err);
+  }
+}
+
 function setLang(lang) {
   if (!I18N[lang] || lang === store.lang) return;
   store.lang = lang;
@@ -476,6 +846,10 @@ function setLang(lang) {
       console.warn(LOG, err);
     }
   });
+  // 画布上的节点标题 / 控件标签 / 端口名同步切换
+  applyAllNodeLang();
+  // 侧边栏按钮下方的文字同步切换
+  refreshSidebarTabLang();
 }
 
 /* ------------------------------------------------------------------ 图库面板 */
@@ -1239,12 +1613,59 @@ function previewHeight(node) {
 
 function applyPreviewHeight(node) {
   const h = previewHeight(node);
-  const el = node.__paPreview?.el;
+  const state = node.__paPreview;
+  const el = state?.el;
   if (!el) return;
   // 新版前端从元素上的 CSS 变量读取 DOM widget 高度
   el.style.setProperty("--comfy-widget-min-height", `${h}px`);
   el.style.setProperty("--comfy-widget-max-height", `${h}px`);
   el.style.setProperty("--comfy-widget-height", `${h}px`);
+  clampWidgetLayer(node, state.widget, el);
+}
+
+/**
+ * DOM widget 层尺寸保护。
+ * 前端每帧用 `widget.width ?? node.width` 决定层的宽度：某些状态下 widget 上会残留
+ * 旧的 width（或绑定错乱），层就会比节点宽，预览图直接画出节点外。
+ * 这里在节点绘制时把层宽钳回节点宽度，并清掉残留的 widget.width。
+ */
+function clampWidgetLayer(node, widget, el) {
+  if (!node || !el) return;
+  const layer = el.parentElement;
+  if (!layer || !layer.style) return;
+  if (widget && widget.width != null) widget.width = undefined;
+  const m = (Number(widget?.margin) || 10) * 2;
+  const targetW = Math.max(60, node.size[0] - m);
+  const curW = parseFloat(layer.style.width);
+  if (!isNaN(curW) && Math.abs(curW - targetW) > 1) layer.style.width = `${targetW}px`;
+}
+
+/** 每帧钳一次层宽，节点画到哪层就跟到哪 */
+function hookWidgetLayerClamp(nodeType) {
+  const onDrawForeground = nodeType.prototype.onDrawForeground;
+  nodeType.prototype.onDrawForeground = function (...args) {
+    const r = onDrawForeground?.apply(this, arguments);
+    try {
+      clampWidgetLayer(this, this.__paPreview?.widget, this.__paPreview?.el);
+      clampWidgetLayer(this, this.__paPrompt?.widget, this.__paPrompt?.el);
+    } catch (err) {
+      /* 尺寸保护失败不影响绘制 */
+    }
+    return r;
+  };
+}
+
+/** 加载旧工作流时节点存的高度可能装不下预览，撑到能装下（只放大不缩小） */
+function fitNodeToWidgets(node) {
+  try {
+    const need = node.computeSize?.();
+    if (need && need[1] > node.size[1] + 0.5) {
+      node.size[1] = need[1];
+      node.setDirtyCanvas?.(true, true);
+    }
+  } catch (err) {
+    /* ignore */
+  }
 }
 
 function hookPreviewWidget(node, nodeKind) {
@@ -1273,7 +1694,7 @@ function hookPreviewWidget(node, nodeKind) {
       widget.computeSize = (width) => [width, previewHeight(node)];
     }
 
-    node.__paPreview = { el, waiting: false, _key: "" };
+    node.__paPreview = { el, widget, waiting: false, _key: "" };
     applyPreviewHeight(node);
 
     // 加载节点：点预览直接打开选图弹窗；多视角节点：点缩略图切换 angles
@@ -1315,6 +1736,185 @@ function hookPreviewWidget(node, nodeKind) {
   });
 
   refreshPreview(node);
+}
+
+/* ---------------------------------------------------- 智能连接提示词 · 文本预览 */
+const PROMPT_PREVIEW_MIN = 78;
+const PROMPT_PREVIEW_MAX = 340;
+
+function applyPromptHeight(node) {
+  const state = node.__paPrompt;
+  const el = state?.el;
+  if (!el) return;
+  el.style.setProperty("--comfy-widget-min-height", `${state.height}px`);
+  el.style.setProperty("--comfy-widget-max-height", `${state.height}px`);
+  el.style.setProperty("--comfy-widget-height", `${state.height}px`);
+  clampWidgetLayer(node, state.widget, el);
+}
+
+function setPromptPreview(node, payload = {}) {
+  const state = node.__paPrompt;
+  if (!state) return;
+  if (Array.isArray(payload.slots)) {
+    state.slotsEl.textContent = "";
+    if (payload.slots.length) {
+      payload.slots.forEach((text) => {
+        const chip = document.createElement("span");
+        chip.className = "pa-ppreview__chip";
+        chip.textContent = text;
+        state.slotsEl.appendChild(chip);
+      });
+    } else {
+      state.slotsEl.textContent = "";
+    }
+  }
+  if (typeof payload.text === "string") {
+    state.text = payload.text;
+    state.textEl.textContent = payload.text || "（没有接到图库节点：把图库节点的「智能连接提示词」端口拉进来）";
+    state.copyEl.style.display = payload.text ? "" : "none";
+  }
+  const h = Math.min(Math.max(Math.ceil(state.el.scrollHeight || PROMPT_PREVIEW_MIN) + 8, PROMPT_PREVIEW_MIN), PROMPT_PREVIEW_MAX);
+  if (h !== state.height) {
+    state.height = h;
+    applyPromptHeight(node);
+    node.setDirtyCanvas?.(true, true);
+  }
+}
+
+function addPromptPreview(node) {
+  if (typeof node.addDOMWidget !== "function") {
+    console.warn(LOG, "当前前端不支持 addDOMWidget，跳过提示词预览");
+    return;
+  }
+  const el = document.createElement("div");
+  el.className = "pa-ppreview";
+
+  const headEl = document.createElement("div");
+  headEl.className = "pa-ppreview__head";
+  const slotsEl = document.createElement("div");
+  slotsEl.className = "pa-ppreview__slots";
+  const copyEl = document.createElement("button");
+  copyEl.type = "button";
+  copyEl.className = "pa-ppreview__copy";
+  copyEl.textContent = "复制";
+  copyEl.style.display = "none";
+  const textEl = document.createElement("div");
+  textEl.className = "pa-ppreview__text";
+  textEl.textContent = "（运行工作流后在这里显示提示词）";
+
+  headEl.append(slotsEl, copyEl);
+  el.append(headEl, textEl);
+
+  const state = { el, slotsEl, textEl, copyEl, height: PROMPT_PREVIEW_MIN, text: "" };
+  node.__paPrompt = state;
+
+  copyEl.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (!state.text) return;
+    const done = () => {
+      copyEl.textContent = "已复制";
+      setTimeout(() => (copyEl.textContent = "复制"), 1200);
+    };
+    try {
+      navigator.clipboard?.writeText(state.text)?.then(done, done) ?? done();
+    } catch (err) {
+      done();
+    }
+  });
+
+  const widget = node.addDOMWidget("smart_prompt_preview", "提示词预览", el, {
+    serialize: false,
+    hideOnZoom: false,
+    getMinHeight: () => state.height,
+    getMaxHeight: () => state.height,
+  });
+  widget.serialize = false;
+  if (widget.options) widget.options.serialize = false;
+  if (widget.computeSize) widget.computeSize = (width) => [width, state.height];
+  state.widget = widget;
+  applyPromptHeight(node);
+}
+
+function syncPromptToggles(node) {
+  PROMPT_TOGGLES.forEach(({ watch, when, target }) => {
+    const src = findWidget(node, [watch]);
+    const dst = findWidget(node, [target]);
+    if (!src || !dst) return;
+    const show = when.includes(String(src.value));
+    dst.hidden = !show;
+    try {
+      if (dst.element) dst.element.style.display = show ? "" : "none";
+      if (dst.inputElement) dst.inputElement.style.display = show ? "" : "none";
+    } catch (err) {
+      /* 新旧前端字段不同，忽略 */
+    }
+  });
+  node.setDirtyCanvas?.(true, true);
+}
+
+function hookSmartPromptNode(nodeType) {
+  hookWidgetLayerClamp(nodeType);
+  const onNodeCreated = nodeType.prototype.onNodeCreated;
+  nodeType.prototype.onNodeCreated = function (...args) {
+    const result = onNodeCreated?.apply(this, args);
+    const node = this;
+    try {
+      applyNodeLang(node);
+      addPromptPreview(node);
+      normalizePromptCombos(node);
+      syncPromptToggles(node);
+      ["句式模板", "标签样式"].forEach((name) => {
+        const w = findWidget(node, [name]);
+        if (!w) return;
+        const orig = w.callback;
+        w.callback = function (...cbArgs) {
+          const r = orig?.apply(this, cbArgs);
+          try {
+            syncPromptToggles(node);
+          } catch (err) {
+            /* ignore */
+          }
+          return r;
+        };
+      });
+    } catch (err) {
+      console.warn(LOG, "智能连接提示词节点初始化失败", err);
+    }
+    return result;
+  };
+
+  const onExecuted = nodeType.prototype.onExecuted;
+  nodeType.prototype.onExecuted = function (message) {
+    const result = onExecuted?.apply(this, arguments);
+    try {
+      const raw = Array.isArray(message?.text) ? message.text[0] : message?.text;
+      setPromptPreview(this, { text: typeof raw === "string" ? raw : "", slots: message?.pa_slots });
+    } catch (err) {
+      console.warn(LOG, "提示词预览更新失败", err);
+    }
+    return result;
+  };
+
+  const onConfigure = nodeType.prototype.onConfigure;
+  nodeType.prototype.onConfigure = function (...args) {
+    const result = onConfigure?.apply(this, args);
+    try {
+      // 旧工作流恢复后：先把错位的连线拨回新端口，下拉框空值纠成默认，再联动显示
+      applyNodeLang(this);
+      migratePromptLinks(this);
+      normalizePromptCombos(this);
+      syncPromptToggles(this);
+      fitNodeToWidgets(this);
+      const cached = app.nodeOutputs?.[String(this.id)] ?? app.nodeOutputs?.[this.id];
+      if (cached?.text) {
+        const raw = Array.isArray(cached.text) ? cached.text[0] : cached.text;
+        setPromptPreview(this, { text: String(raw), slots: cached.pa_slots });
+      }
+    } catch (err) {
+      /* ignore */
+    }
+    return result;
+  };
 }
 
 /* ------------------------------------------------------------------ 弹窗图鉴 */
@@ -1413,15 +2013,30 @@ app.registerExtension({
   name: EXT_NAME,
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
+    // 注册时把搜索菜单 / 默认标题翻成当前语言（注册只发生一次，切换语言后要刷新页面才影响新建菜单）
+    const titles = NODE_I18N[nodeData?.name];
+    if (titles) {
+      try {
+        nodeData.display_name = titles[store.lang] || titles.zh;
+      } catch (err) {
+        /* ignore */
+      }
+    }
+    if (nodeData?.name === NODE_SMART_PROMPT) {
+      hookSmartPromptNode(nodeType);
+      return;
+    }
     if (!PICKER_NODES.includes(nodeData?.name)) return;
     const nodeKind = nodeData.name;
     const spec = PREVIEW_SPECS[nodeKind];
+    hookWidgetLayerClamp(nodeType);
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function (...args) {
       const result = onNodeCreated?.apply(this, args);
       const node = this;
       try {
+        applyNodeLang(node);
         const widget = node.addWidget("button", t(`picker${spec.atlas[0].toUpperCase()}${spec.atlas.slice(1)}`), null, () => {
           openModal({ target: node });
         });
@@ -1443,13 +2058,25 @@ app.registerExtension({
     nodeType.prototype.onConfigure = function (...args) {
       const result = onConfigure?.apply(this, args);
       try {
+        applyNodeLang(this);
         this.__paPreview && (this.__paPreview._key = "");
+        fitNodeToWidgets(this);
         refreshPreview(this);
       } catch (err) {
         /* ignore */
       }
       return result;
     };
+  },
+
+  // 旧工作流里「智能连接提示词」连线的端口序号要对齐，必须在连线建立之前改
+  async beforeConfigureGraph(data) {
+    try {
+      const fixed = migrateLegacyLinkSlots(data);
+      if (fixed) console.log(LOG, `已把旧工作流里的 ${fixed} 根参考图连线改到新端口`);
+    } catch (err) {
+      console.warn(LOG, "参考图连线迁移失败", err);
+    }
   },
 
   async setup() {
