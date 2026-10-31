@@ -259,7 +259,7 @@ ComfyUI-RuiC-PoseAtlas/
 
 ## 致谢与版权
 
-- 图鉴数据与静态站来自 **[HRuiCcc/RuiC-PoseAtlas](https://github.com/HRuiCcc/RuiC-PoseAtlas)**（及其上游 lxxpqxxl/RuiC-PoseAtlas），本项目在其基础上做 ComfyUI 节点发行与功能增强；
+- 图鉴数据与静态站来自 **[HRuiCcc/RuiC-PoseAtlas](https://github.com/HRuiCcc/RuiC-PoseAtlas)**，本项目在其基础上做 ComfyUI 节点发行与功能增强；
 - 代码部分以 MIT 许可发布（见 [LICENSE](LICENSE)），数据与图片版权归原作者所有，使用请遵循原仓库的版权与免责声明；
 - 人像图为 AI 生成的虚构人物，如有雷同纯属巧合。
 
